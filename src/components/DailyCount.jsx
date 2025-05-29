@@ -1,158 +1,176 @@
 // src/components/DailyCount.jsx
 
-import React, { useState, useEffect,useRef } from 'react';
-import { DataGrid } from '@mui/x-data-grid';
-import { Box, Typography, Button } from '@mui/material';
-import { daily } from '../services/orders';
-import { useNotification } from '../context/NotificationContext';
-import api from '../services/api';
+import React, { useState, useEffect, useRef } from "react";
+import { DataGrid } from "@mui/x-data-grid";
+import {
+  Box,
+  Typography,
+  Button,
+  Paper,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+} from "@mui/material";
+import ReactQuill from "react-quill";
+import "react-quill/dist/quill.snow.css";
+import { useReactToPrint } from "react-to-print";
+import { QRCodeSVG } from "qrcode.react";
+import { daily } from "../services/orders";
+import api from "../services/api";
+import { useNotification } from "../context/NotificationContext";
+
 export default function DailyCount() {
   const notify = useNotification();
-const printRef = useRef();
-  // All tiffins for today
+  const printRef = useRef();
+
+  // packing workflow
   const [rows, setRows] = useState([]);
-  // Subset remaining to pack
   const [remaining, setRemaining] = useState([]);
-  // Are we in “packing” mode?
   const [packing, setPacking] = useState(false);
-  // IDs of rows that user has checked as “packed”
   const [selectionModel, setSelectionModel] = useState([]);
 
-  // Load data once
+  // template + preview
+  const [templateHtml, setTemplateHtml] = useState("");
+  const [previewCustomer, setPreviewCustomer] = useState(null);
+
+  // load tiffins & saved template
   useEffect(() => {
     daily()
-      .then(res => {
-        console.log(res.data);
+      .then((res) => {
         const data = res.data.map((item, idx) => {
           const o = item.order;
-          const plan = item.meal_plan;
-          const cust = o.customer || {};
+          const p = item.meal_plan;
+          const c = o.customer || {};
           return {
-            id: idx+1,
-            plan: plan?.name || plan?.planname,
-            customer: cust?.name,
-            address:  cust.address,  
-            qty: item.quantity
+            id: idx + 1,
+            plan: p?.name || p?.planname,
+            customer: c.name,
+            address: c.address,
+            qty: item.quantity,
           };
         });
         setRows(data);
+        if (data.length) setPreviewCustomer(data[0]);
       })
-      .catch(err => notify({ message: err.message, severity: 'error' }));
-  }, []);
+      .catch((err) => notify({ message: err.message, severity: "error" }));
 
-  // Start Packing: initialize remaining list
+    api
+      .get("/label-template")
+      .then(({ data }) => setTemplateHtml(data.content || ""))
+      .catch((err) => notify({ message: err.message, severity: "error" }));
+  }, [notify]);
+
+  // packing handlers
   const handleStart = () => {
     setRemaining(rows);
     setSelectionModel([]);
     setPacking(true);
   };
-
-  // End Packing: find unchecked = still to pack
   const handleEnd = () => {
-    const packedIds = new Set(selectionModel);
-    const unchecked = remaining.filter(r => !packedIds.has(r.id));
-
-    if (unchecked.length === 0) {
-      notify({ message: 'Done with packing for today!', severity: 'success' });
+    const packed = new Set(selectionModel);
+    const leftover = remaining.filter((r) => !packed.has(r.id));
+    if (leftover.length === 0) {
+      notify({ message: "Done packing!", severity: "success" });
       setPacking(false);
     } else {
       notify({
-        message: 'These tiffins remain to pack – please pack them and try again.',
-        severity: 'warning'
+        message: "These tiffins remain – please pack them and try again.",
+        severity: "warning",
       });
-      setRemaining(unchecked);
-      setSelectionModel([]); // reset for next pass
+      setRemaining(leftover);
+      setSelectionModel([]);
     }
   };
 
-   // New: Print Labels button handler
- const handlePrintLabels = () => {
-    const defaultTpl = {
-  line1: 'Surti Fusion',
-  line2: '{{customerName}}',
-  line3: '{{customerAddress}}'
-};
+  const triggerPrint = useReactToPrint({
+    content: () => printRef.current,
+    contentRef: printRef,
+    pageStyle: `
+    @page {size: 4in 2in;margin: 0mm }
+    body { margin:0mm; padding: 0mm }
+   
+    .label {
+      border: none !important;
+      width: 4in; height: 2in;
+      box-shadow: none !important;
+      overflow: hidden;
+    }
+    .ql-container {
+      border: none !important;
+      box-shadow: none !important;
+      overflow: hidden;
+    }
+    .ql-editor {
+      margin: 0;
+      border: none !important;
+      padding: 0 !important;
+    }
+  `,
+  });
+  // build & print
+  const handlePrintLabels = async () => {
+    // fetch latest template
+    let tpl = "";
+    try {
+      const { data } = await api.get("/label-template");
+      tpl = data.content || "";
+    } catch (err) {
+      return notify({ message: "Failed to load template", severity: "error" });
+    }
+    if (!tpl) {
+      return notify({
+        message: "Save your label template first.",
+        severity: "warning",
+      });
+    }
 
-// Load saved or fall back:
-const tpl = JSON.parse(localStorage.getItem('labelTemplate') || 'null') || defaultTpl;
-  console.log(rows);
-   // Distinct customers with addresses
-  const distinctData = Array.from(
-    rows.reduce((map, r) => {
-      if (!map.has(r.customer)) map.set(r.customer, r.address|| '');
-      return map;
-    }, new Map())
-  ); // array of [name, address]
+    // distinct customer→address
+    const custMap = new Map();
+    rows.forEach((r) => {
+      if (!custMap.has(r.customer)) {
+        custMap.set(r.customer, r.address || "");
+      }
+    });
 
-    // Build printable HTML
-    const html = `
-    <html>
-      <head>
-        <style>
-          @media print {
-            @page { size: 4in 2in; margin: 0; }
-            body { margin: 0; }
-          }
-          .label {
-            width: 4in; height: 2in;
-            padding: 0.2in; box-sizing: border-box;
-            page-break-after: always;
-          }
-          .line1 { text-align: center; font-size: 24px; font-weight: bold; }
-          .line2 { margin-top: 0.2in; font-size: 20px; }
-          .line3 { margin-top: 0.1in; font-size: 18px; }
-        </style>
-      </head>
-      <body>
-        ${distinctData.map(([name, address]) => `
-          <div class="label">
-            <div class="line1">${tpl.line1}</div>
-            <div class="line2">${tpl.line2.replace('{{customerName}}', name)}</div>
-            <div class="line3">${tpl.line3.replace('{{customerAddress}}', address || '')}</div>
-          </div>
-        `).join('')}
-      </body>
-    </html>
-  `;
-   const iframe = document.createElement('iframe');
-  iframe.style.position = 'fixed';
-  iframe.style.right = '0';
-  iframe.style.bottom = '0';
-  iframe.style.width = '0';
-  iframe.style.height = '0';
-  iframe.style.border = '0';
-  document.body.appendChild(iframe);
+    // generate HTML
+    const html = Array.from(custMap.entries())
+      .map(([name, address]) => {
+        const filled = tpl
+          .replace(/{{customerName}}/g, name)
+          .replace(/{{customerAddress}}/g, address);
+        return `
+<div class="label" >
+  <div class="ql-container ql-snow">
+    <div class="ql-editor">${filled}</div>
+  </div>
+</div>`;
+      })
+      .join("\n");
 
-  // 5) Write to iframe and trigger print
-  const doc = iframe.contentWindow.document;
-  doc.open();
-  doc.write(html);
-  doc.close();
-
-  // Wait for content to load before printing
-  iframe.onload = () => {
-    iframe.contentWindow.focus();
-    iframe.contentWindow.print();
-    // remove the iframe after printing
-    setTimeout(() => document.body.removeChild(iframe), 500);
+    // inject & fire
+    if (printRef.current) {
+      printRef.current.innerHTML = html;
+      triggerPrint();
+    }
   };
-};
-  // Rows to display: full list or just remaining
-  const displayRows = packing ? remaining : rows;
 
+  // grid + preview
+  const displayRows = packing ? remaining : rows;
   const columns = [
-    { field: 'plan',     headerName: 'Meal Plan', width: 200 },
-    { field: 'customer', headerName: 'Customer',  width: 180 },
-    /*{ field: 'address',  headerName: 'Address',   width: 200 }, // optional*/
-    { field: 'qty',      headerName: 'Quantity',  width: 100 },
+    { field: "plan", headerName: "Meal Plan", width: 200 },
+    { field: "customer", headerName: "Customer", width: 180 },
+    { field: "qty", headerName: "Quantity", width: 100 },
   ];
 
   return (
-    <Box sx={{ width: '100%', mt: 2 }}>
-      <Typography variant="h6" mb={1}>Today's Tiffin Counts</Typography>
+    <Box sx={{ width: "100%", mt: 2 }}>
+      <Typography variant="h6" mb={1}>
+        Today's Tiffin Counts
+      </Typography>
 
       {!packing ? (
-        <Button variant="contained" onClick={handleStart} sx={{ mb: 2 }}>
+        <Button variant="contained" onClick={handleStart} sx={{ mr: 1 }}>
           Start Packing
         </Button>
       ) : (
@@ -160,73 +178,125 @@ const tpl = JSON.parse(localStorage.getItem('labelTemplate') || 'null') || defau
           variant="contained"
           color="secondary"
           onClick={handleEnd}
-          sx={{ mb: 2 }}
+          sx={{ mr: 1 }}
         >
           End Packing
         </Button>
       )}
+      <Button variant="outlined" onClick={handlePrintLabels}>
+        Print Labels
+      </Button>
 
- {/* New Print Labels button */}
-     <Button variant="outlined" onClick={handlePrintLabels} sx={{ ml: 1 }}>
-  Print Labels
-</Button>
+      {/* Hidden container */}
+      <div style={{ display: "none" }}>
+        <div ref={printRef} />
+      </div>
 
-      <DataGrid
-        rows={displayRows}
-        columns={columns}
-        pageSize={5}
-        rowsPerPageOptions={[5]}
-        autoHeight
-        checkboxSelection={packing}
-        disableSelectionOnClick
-        selectionModel={selectionModel}
-        onSelectionModelChange={newSelection =>
-          setSelectionModel(newSelection)
-        }
-      />
+      <Box sx={{ height: 400, mt: 2 }}>
+        <DataGrid
+          rows={displayRows}
+          columns={columns}
+          pageSize={5}
+          rowsPerPageOptions={[5]}
+          checkboxSelection={packing}
+          disableSelectionOnClick
+          selectionModel={selectionModel}
+          onSelectionModelChange={(sel) => setSelectionModel(sel)}
+        />
+      </Box>
+
+      {/* Label Preview */}
+      {!packing && previewCustomer && (
+        <Paper sx={{ mt: 4, p: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Label Preview
+          </Typography>
+
+          <FormControl fullWidth sx={{ mb: 2, maxWidth: 300 }}>
+            <InputLabel id="preview-customer-label">Customer</InputLabel>
+            <Select
+              labelId="preview-customer-label"
+              label="Customer"
+              value={previewCustomer.id}
+              onChange={(e) => {
+                const c = rows.find((r) => r.id === e.target.value);
+                setPreviewCustomer(c);
+              }}
+            >
+              {rows.map((r) => (
+                <MenuItem key={r.id} value={r.id}>
+                  {r.customer}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <Paper
+            elevation={3}
+            sx={{
+              width: "4in",
+              height: "2in",
+              position: "relative",
+              overflow: "hidden",
+              p: "0.2in",
+              boxSizing: "border-box",
+              backgroundColor: "#fff",
+            }}
+          >
+            <ReactQuill
+              theme="bubble"
+              value={templateHtml
+                .replace(/{{customerName}}/g, previewCustomer.customer)
+                .replace(/{{customerAddress}}/g, previewCustomer.address)}
+              readOnly
+              modules={{ toolbar: false }}
+              formats={[
+                "header",
+                "bold",
+                "italic",
+                "underline",
+                "strike",
+                "color",
+                "background",
+                "size",
+                "align",
+                "link",
+                "image",
+              ]}
+              style={{ height: "100%", pointerEvents: "none" }}
+            />
+            <Box sx={{ position: "absolute", bottom: 10, left: 10 }}>
+              <QRCodeSVG value={previewCustomer.customer} size={60} />
+            </Box>
+          </Paper>
+        </Paper>
+      )}
     </Box>
   );
 }
 
-
-/*import React, { useState, useEffect } from 'react';
-import { DataGrid } from '@mui/x-data-grid';
-import { daily } from '../services/orders';
-import { useNotification } from '../context/NotificationContext';
-import { Box, Typography } from '@mui/material';
-
-export default function DailyCount() {
-  const notify = useNotification();
-  const [rows, setRows] = useState([]);
-
-  useEffect(() => {
-    daily()
-      .then(res => {
-        const data = res.data.map((item, idx) => {
-          const o = item.order;
-          const plan = item.meal_plan;
-          return {
-            id: idx,
-            plan: plan?.name || plan?.planname,
-            customer: o.customer?.name,
-            qty: item.quantity
-          };
-        });
-        setRows(data);
-      })
-      .catch(err => notify({ message:err.message, severity:'error' }));
-  }, []);
-
-  const columns = [
-    { field:'plan',     headerName:'Meal Plan', width:200 },
-    { field:'customer', headerName:'Customer',  width:180 },
-    { field:'qty',      headerName:'Quantity',  width:100 }
-  ];
-
-  return (
-    <Box sx={{ height:400, width:'100%', mt:2 }}>
-      <Typography variant="h6" mb={1}>Today's Tiffin Counts</Typography>
-      <DataGrid rows={rows} columns={columns} pageSize={5} />
-    </Box>
-  );
-}*/
+/* const triggerPrint = useReactToPrint({
+    content: () => printRef.current,
+    contentRef: printRef, // legacy fallback
+    pageStyle: `
+    @page {
+      size: auto;   
+      margin: 0mm;  
+    }
+    body {
+      margin: 0mm;
+    }
+      @page { size: 4in 2in;}
+      
+      body { padding: 0mm; }
+      .label {
+      border: none !important;
+      box-shadow: none !important;
+        width: 4in; height: 2in;
+        border: none;
+        overflow: hidden;
+        border-color: white;
+      }
+    `,
+  });
+  */

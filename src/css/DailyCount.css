@@ -1,0 +1,26 @@
+
+
+/* Force the editing area itself to exactly 4″×2″ */
+
+ .ql-container .ql-editor {
+  width: 4in;              /* 4 inches wide */
+  height: 2in;  
+  max-width: 4in;
+  max-height: 2in;   /* 2 inches tall */
+  margin: auto;
+  min-width: 4in;
+  min-height: 2in;
+  /*border-style: groove;   */ 
+  overflow: hidden;    
+}
+.quill-preview {
+  width: 4in;              /* 4 inches wide */
+  height: 2in;  
+  max-width: 4in;
+  max-height: 2in;   /* 2 inches tall */
+  margin: auto;
+  min-width: 4in;
+  min-height: 2in;
+  /*border-style: groove; */
+  overflow: hidden;        
+}

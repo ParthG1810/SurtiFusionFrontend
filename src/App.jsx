@@ -10,8 +10,8 @@ import MealPlans  from './pages/MealPlans';
 import Customers  from './pages/Customers';
 import PlaceOrder from './pages/PlaceOrder';
 import History    from './pages/History';
-import LabelFormat from './pages/LabelFormat';
 import DailyCounts from './pages/DailyCounts';
+import LabelFormat from './pages/LabelFormat';
 import Unauthorized from './pages/Unauthorized';
 
 const PrivateRoute = ({ children, roles }) => {

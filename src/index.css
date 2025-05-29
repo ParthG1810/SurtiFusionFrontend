@@ -11,3 +11,16 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+body * {
+    visibility: hidden;
+  }
+  /* Show only the printable area */
+  .printable, .printable * {
+    visibility: visible;
+  }
+  /* Position it at top-left */
+  .printable {
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
