@@ -1,166 +1,284 @@
-import React, { useState, useEffect, useRef } from 'react';
-import ReactDOM from 'react-dom';
-import ReactQuill, { Quill } from 'react-quill';
-import './LabelFormat.css';
-import 'react-quill/dist/quill.snow.css';
-// Image resize module for Quill
-import ImageResize from 'quill-image-resize-module-react';
-import { QRCodeSVG as QRCode } from 'qrcode.react';
-import { Box, Typography, Button, Paper } from '@mui/material';
-import { useNotification } from '../context/NotificationContext';
+// src/pages/LabelFormat.jsx
 
-// Register the image resize module
-Quill.register('modules/imageResize', ImageResize);
-const STORAGE_KEY = 'labelTemplateHTML';
-const SAMPLE_NAME = 'Alice Smith';
-const SAMPLE_ADDRESS = '123 Main St, Springfield';
+import React, { useState, useRef, useEffect } from "react";
+import ReactQuill from "react-quill";
+import Quill from "quill"; // core Quill
+import ImageResize from "quill-image-resize-module-react";
+import "react-quill/dist/quill.snow.css";
+import interact from "interactjs";
+import { Box, Button, Typography, Paper, Stack } from "@mui/material";
+import api from "../services/api";
+import { useNotification } from "../context/NotificationContext";
+import "../css/LabelFormat.css";
+// Register image-resize against the real Quill constructor
+Quill.register("modules/imageResize", ImageResize);
+const Parchment = Quill.import("parchment");
+const SizePx = new Parchment.Attributor.Style("sizePx", "font-size", {
+  scope: Parchment.Scope.INLINE,
+});
+Quill.register(SizePx, true);
+
+const SAMPLE_NAME = "Alice Smith";
+const SAMPLE_ADDRESS = "123 Main St, Springfield";
 
 export default function LabelFormat() {
   const notify = useNotification();
-  const defaultTplHtml = localStorage.getItem(STORAGE_KEY) || '';
-  const [html, setHtml] = useState(
-   () => localStorage.getItem(STORAGE_KEY) || defaultTplHtml
- );
- const editorRef = useRef(null);
   const quillRef = useRef(null);
-  const previewRef = useRef(null);
 
-  
+  const [dynamicHtml, setDynamicHtml] = useState("");
+  const [editorHtml, setEditorHtml] = useState("");
 
-  // Render preview and inject QR
+  // Load saved template on mount
   useEffect(() => {
-    if (previewRef.current) {
-      // Render template with sample data
-      previewRef.current.innerHTML = html
-        .replace(/{{customerName}}/g, SAMPLE_NAME)
-        .replace(/{{customerAddress}}/g, SAMPLE_ADDRESS);
-      // Inject QR code
-      const qrEl = previewRef.current.querySelector('#qr-placeholder');
-      if (qrEl) {
-        ReactDOM.render(<QRCode value={SAMPLE_NAME} size={60} />, qrEl);
-      }
-    }
-  }, [html]);
+    api
+      .get("/label-template")
+      .then(({ data }) => {
+        const content = data.content || "";
+        setEditorHtml(content);
+        setDynamicHtml(content);
+        if (quillRef.current) {
+          quillRef.current.getEditor().root.innerHTML = content;
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        notify({ message: "Failed to load template", severity: "error" });
+      });
+  }, [notify]);
 
+  // Save handler
   const handleSave = () => {
-     try {
-       const editor = editorRef.current.getEditor();
-      const currentHtml = editor.root.innerHTML;
-      // Save current template HTML from state
-      localStorage.setItem(STORAGE_KEY, currentHtml);
-       setHtml(currentHtml);
-      notify({ message: 'Template saved!', severity: 'success' });
-    } catch (err) {
-      console.error('Save template error:', err);
-      notify({ message: 'Failed to save template', severity: 'error' });
-    }
-    //const template = quillRef.current.getEditor().root.innerHTML;
-    //localStorage.setItem(STORAGE_KEY, template);
-    //setHtml(template);
-   // notify({ message: 'Template saved!', severity: 'success' });
+    if (!quillRef.current) return;
+    // allow any inline resize styles to settle
+    setTimeout(async () => {
+      const content = quillRef.current.getEditor().root.innerHTML;
+      try {
+        const { data } = await api.post("/label-template", { content });
+        setEditorHtml(data.content);
+        setDynamicHtml(data.content);
+        notify({ message: "Template saved!", severity: "success" });
+      } catch (err) {
+        console.error(err);
+        notify({ message: "Save failed", severity: "error" });
+      }
+    }, 0);
   };
 
-  return (
-    <Box sx={{   }}>
-      <Typography variant="h5" gutterBottom>
-        Label Template Editor (4″×2″)
-      </Typography>
+  // Cancel & reload handler
+  const handleCancelLoad = () => {
+    api
+      .get("/label-template")
+      .then(({ data }) => {
+        setEditorHtml(data.content);
+        setDynamicHtml(data.content);
+        if (quillRef.current) {
+          quillRef.current.getEditor().root.innerHTML = data.content;
+        }
+        notify({
+          message: "Cancelled changes and Loaded saved template",
+          severity: "info",
+        });
+      })
+      .catch((err) => {
+        console.error(err);
+        notify({ message: "Load failed", severity: "error" });
+      });
+  };
+  // — Font size handlers —
+  const changeFont = (delta) => {
+    const editor = quillRef.current?.getEditor();
+    if (!editor) return;
+    const range = editor.getSelection();
+    if (!range) return;
 
-      <Paper sx={{   overflow: 'hidden', position: 'relative' }}>
-        <Box sx={{ width: '100%', height: '100%', '& .ql-container': { height: '100%', width: '100%' }, '& .ql-editor': { minHeight: '0', height: '100%' } }}>
-        <div className="custom-quill">
-        <ReactQuill
-          ref={editorRef}
-          theme="snow"
-          value={html}
-          onChange={(value) => setHtml(value)} 
-          modules={{
-            toolbar: [
-              [{ 'header': [1, 2, 3, 4, 5, 6, false] }],
-              [{ size: ['small', false, 'large', 'huge'] }],  // font sizes
-              ['bold', 'italic', 'underline', 'strike'],
-              ['blockquote', 'code-block'],
-              ['link', 'image', 'video', 'formula'],
-              [{ 'script': 'sub'}, { 'script': 'super' }],      // superscript/subscript
-  [{ 'indent': '-1'}, { 'indent': '+1' }],          // outdent/indent
-  [{ 'direction': 'rtl' }],                         // text direction
-              [{ color: [] }, { background: [] }],
-              [{ font: [] }],                              // font families
-              [{ align: [] }],                             // alignment options
-              [{ 'list': 'ordered'}, { 'list': 'bullet' }, { 'list': 'check' }],
-              ['clean']
-            ],
-            imageResize: {
-              parchment: Quill.import('parchment'),modules: [ 'Resize', 'DisplaySize', 'Toolbar' ]
-            }
-          }}
-          formats={['header', 'size', 'font',
-            'bold', 'italic', 'underline', 'strike',
-            'color','align', 'background',
-            'list', 'bullet',
-            'link', 'image']}
-          style={{  }}
-          placeholder="Design your 4x2 label here..."
-        />
-        </div>
-        </Box>
-        <Button variant="contained" onClick={handleSave} sx={{ mt: 2 }}>
+    // 1) Read any existing sizePx from the current selection
+    const formats = editor.getFormat(range);
+
+    let currentPx;
+    if (formats.sizePx) {
+      currentPx = parseInt(formats.sizePx, 10);
+    } else {
+      // find the DOM node at the start of the selection
+      const [leaf] = editor.getLeaf(range.index);
+      const computed = window.getComputedStyle(leaf.domNode).fontSize;
+      currentPx = parseInt(computed, 10) || 12;
+    }
+
+    // 2) Compute new size
+    const newPx = Math.max(1, currentPx + delta);
+
+    // 3) Apply it over the whole selection
+    if (range.length > 0) {
+      editor.formatText(
+        range.index,
+        range.length,
+        "sizePx",
+        `${newPx}px`,
+        Quill.sources.USER
+      );
+    } else {
+      // collapsed cursor: set format for future typing
+      editor.format("sizePx", `${newPx}px`, Quill.sources.USER);
+    }
+  };
+
+  // External Insert QR button handler
+  const insertQR = () => {
+    const editor = quillRef.current?.getEditor();
+    if (!editor) return;
+
+    // Use template placeholder instead of prompt
+    const text = "{{customerName}}-{{mealPlan}}";
+
+    // QuickChart API for a 5×5 px QR
+    const url = `https://quickchart.io/qr?text=${encodeURIComponent(
+      text
+    )}&size=5`;
+
+    // Determine insertion index (append if no selection)
+    let range = editor.getSelection(true);
+    if (!range) {
+      range = { index: editor.getLength(), length: 0 };
+    }
+
+    // Build an absolutely-positioned <img> tag
+    const imgHtml = `
+      <img
+        src="${url}"
+        style="
+          position:absolute;
+          bottom:2mm;
+          left:2mm;
+          width:5mm;
+          height:5mm;
+          z-index:10;
+        "
+        alt="QR code"
+      />
+    `;
+
+    // Inject into the editor
+    editor.clipboard.dangerouslyPasteHTML(range.index, imgHtml);
+    editor.setSelection(range.index + 1, Quill.sources.SILENT);
+  };
+
+  // Quill modules
+  const modules = {
+    toolbar: [
+      [{ header: [1, 2, 3, 4, 5, 6, false] }],
+      [{ size: ["small", false, "large", "huge"] }],
+      ["bold", "italic", "underline", "strike"],
+      ["blockquote", "code-block"],
+      ["link", "image", "video", "formula"],
+      [{ script: "sub" }, { script: "super" }],
+      [{ indent: "-1" }, { indent: "+1" }],
+      [{ direction: "rtl" }],
+      [{ color: [] }, { background: [] }],
+      [{ font: [] }],
+      [{ align: [] }],
+      [{ list: "ordered" }, { list: "bullet" }, { list: "check" }],
+      ["clean"],
+    ],
+    imageResize: {
+      parchment: Quill.import("parchment"),
+      modules: ["Resize", "DisplaySize", "Toolbar"],
+    },
+  };
+
+  // Formats must include image
+  const formats = [
+    "header",
+    "size",
+    "font",
+    "bold",
+    "italic",
+    "underline",
+    "strike",
+    "color",
+    "align",
+    "background",
+    "list",
+    "bullet",
+    "link",
+    "image",
+    "sizePx",
+  ];
+  // Constrain editor to 4″×2″ (approx 384×192px @96dpi)
+  const editorStyle = {
+    width: "4in",
+    height: "2in",
+    position: "relative",
+    border: "1px solid #ccc",
+  };
+  return (
+    <Box sx={{ maxWidth: 800, mx: "auto", mt: 4, display: "grid", gap: 4 }}>
+      <Typography variant="h5">Label Template Editor (4″×2″)</Typography>
+
+      {/* Action Buttons */}
+      <Stack direction="row" spacing={1}>
+        <Button variant="outlined" onClick={insertQR}>
+          Insert QR (5×5px)
+        </Button>
+        <Button variant="outlined" onClick={() => changeFont(+1)}>
+          A+
+        </Button>
+        <Button variant="outlined" onClick={() => changeFont(-1)}>
+          A–
+        </Button>
+        <Button variant="contained" onClick={handleSave}>
           Save Template
         </Button>
+        <Button variant="outlined" onClick={handleCancelLoad}>
+          Cancel & Load Saved
+        </Button>
+      </Stack>
+
+      {/* Rich Text Editor */}
+      <Paper sx={{ overflow: "hidden", position: "relative" }}>
+        <div>
+          <ReactQuill
+            ref={quillRef}
+            theme="snow"
+            value={editorHtml}
+            onChange={setEditorHtml}
+            modules={modules}
+            formats={formats}
+            style={{ backgroundColor: "#fff" }}
+          />
+        </div>
       </Paper>
 
-      <Typography variant="h6" gutterBottom>
-        Live Preview (Sample)
-      </Typography>
-      <Paper sx={{ width: '6in', height: '2.5in', margin: 'auto',  boxSizing: 'border-box', overflow: 'hidden', backgroundColor: '#fff',borderStyle:'groove' }}>
-
-       
- <div className="quill-preview"
-          style={{  overflow: 'auto' }}
-          dangerouslySetInnerHTML={{ __html: html
-            .replace(/{{customerName}}/g, SAMPLE_NAME)
-            .replace(/{{customerAddress}}/g, SAMPLE_ADDRESS)
-          }}  
-        />
-      </Paper>
-       <Paper
-        sx={{
-           width: '6in', height: '3in', margin: 'auto', p: '0.2in', boxSizing: 'border-box', overflow: 'hidden', backgroundColor: '#fff'
-        }}
-      >
-        {/* Read-only Quill preview to preserve styles, sizes, alignment */}
-        <ReactQuill
-          value={html
-            .replace(/{{customerName}}/g, SAMPLE_NAME)
-            .replace(/{{customerAddress}}/g, SAMPLE_ADDRESS)
-          }
-          readOnly
-          theme="bubble"
-          modules={{ toolbar: false }}
-          formats={[
-            'header','size','font','bold','italic','underline','strike',
-            'color','background','align','list','bullet','link','image'
-          ]}
-          style={{width: '4in', height: '2in', borderStyle:'groove',margin: 'auto' }}
-        />
-        {/* QR Code */}
-        <Box
-          sx={{ position: 'absolute', bottom: 10, left: 10 }}
+      {/* Dynamic Live Editor Preview */}
+      <Box>
+        <Typography variant="h6">Dynamic Live Editor Preview</Typography>
+        <Paper
+          sx={{
+            width: "6in",
+            height: "3in",
+            position: "relative",
+            p: 1,
+            margin: "auto",
+            overflow: "hidden",
+          }}
         >
-          <QRCode value={SAMPLE_NAME} size={60} />
-        </Box>
-      </Paper>
+          <ReactQuill
+            theme="snow"
+            value={dynamicHtml
+              .replace(/{{customerName}}/g, SAMPLE_NAME)
+              .replace(/{{customerAddress}}/g, SAMPLE_ADDRESS)}
+            readOnly
+            modules={{ toolbar: false }}
+            formats={formats}
+            style={{
+              width: "4in",
+              height: "2in",
+              margin: "auto",
+              overflow: "hidden",
+              pointerEvents: "none",
+            }}
+          />
+        </Paper>
+      </Box>
     </Box>
-);
+  );
 }
-//<div className="quill-preview" ref={previewRef} />
-/*//Always render QR via React 
-  <Box
-    sx={{
-      position: 'absolute',
-      bottom: '10px',
-      left: '10px'
-    }}
-  >
-    <QRCode value={SAMPLE_NAME} size={60} />
-  </Box>*/

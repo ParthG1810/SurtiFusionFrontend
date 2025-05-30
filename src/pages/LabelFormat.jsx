@@ -5,13 +5,18 @@ import ReactQuill from "react-quill";
 import Quill from "quill"; // core Quill
 import ImageResize from "quill-image-resize-module-react";
 import "react-quill/dist/quill.snow.css";
+import interact from "interactjs";
 import { Box, Button, Typography, Paper, Stack } from "@mui/material";
 import api from "../services/api";
 import { useNotification } from "../context/NotificationContext";
 import "../css/LabelFormat.css";
-
 // Register image-resize against the real Quill constructor
 Quill.register("modules/imageResize", ImageResize);
+const Parchment = Quill.import("parchment");
+const SizePx = new Parchment.Attributor.Style("sizePx", "font-size", {
+  scope: Parchment.Scope.INLINE,
+});
+Quill.register(SizePx, true);
 
 const SAMPLE_NAME = "Alice Smith";
 const SAMPLE_ADDRESS = "123 Main St, Springfield";
@@ -22,7 +27,6 @@ export default function LabelFormat() {
 
   const [dynamicHtml, setDynamicHtml] = useState("");
   const [editorHtml, setEditorHtml] = useState("");
-  const [savedHtml, setSavedHtml] = useState("");
 
   // Load saved template on mount
   useEffect(() => {
@@ -30,7 +34,6 @@ export default function LabelFormat() {
       .get("/label-template")
       .then(({ data }) => {
         const content = data.content || "";
-        setSavedHtml(content);
         setEditorHtml(content);
         setDynamicHtml(content);
         if (quillRef.current) {
@@ -51,7 +54,6 @@ export default function LabelFormat() {
       const content = quillRef.current.getEditor().root.innerHTML;
       try {
         const { data } = await api.post("/label-template", { content });
-        setSavedHtml(data.content);
         setEditorHtml(data.content);
         setDynamicHtml(data.content);
         notify({ message: "Template saved!", severity: "success" });
@@ -67,7 +69,6 @@ export default function LabelFormat() {
     api
       .get("/label-template")
       .then(({ data }) => {
-        setSavedHtml(data.content);
         setEditorHtml(data.content);
         setDynamicHtml(data.content);
         if (quillRef.current) {
@@ -82,6 +83,47 @@ export default function LabelFormat() {
         console.error(err);
         notify({ message: "Load failed", severity: "error" });
       });
+  };
+  // — Font size handlers —
+  const changeFont = (delta) => {
+    const editor = quillRef.current?.getEditor();
+    if (!editor) return;
+    const range = editor.getSelection();
+    if (!range) return;
+
+    // 1) Read any existing sizePx from the current selection
+    const formats = editor.getFormat(range);
+
+    let currentPx;
+    if (formats.sizePx) {
+      currentPx = parseInt(formats.sizePx, 10);
+    } else {
+      // find the DOM node at the start of the selection
+      const [leaf] = editor.getLeaf(range.index);
+      let node = leaf.domNode;
+      if (node.nodeType === Node.TEXT_NODE) {
+        node = node.parentElement;
+      }
+      const computed = window.getComputedStyle(node).fontSize;
+      currentPx = parseInt(computed, 10) || 12;
+    }
+
+    // 2) Compute new size
+    const newPx = Math.max(1, currentPx + delta);
+
+    // 3) Apply it over the whole selection
+    if (range.length > 0) {
+      editor.formatText(
+        range.index,
+        range.length,
+        "sizePx",
+        `${newPx}px`,
+        Quill.sources.USER
+      );
+    } else {
+      // collapsed cursor: set format for future typing
+      editor.format("sizePx", `${newPx}px`, Quill.sources.USER);
+    }
   };
 
   // External Insert QR button handler
@@ -163,16 +205,29 @@ export default function LabelFormat() {
     "bullet",
     "link",
     "image",
+    "sizePx",
   ];
-
+  // Constrain editor to 4″×2″ (approx 384×192px @96dpi)
+  const editorStyle = {
+    width: "4in",
+    height: "2in",
+    position: "relative",
+    border: "1px solid #ccc",
+  };
   return (
     <Box sx={{ maxWidth: 800, mx: "auto", mt: 4, display: "grid", gap: 4 }}>
       <Typography variant="h5">Label Template Editor (4″×2″)</Typography>
 
       {/* Action Buttons */}
-      <Stack direction="row" spacing={2}>
+      <Stack direction="row" spacing={1}>
         <Button variant="outlined" onClick={insertQR}>
           Insert QR (5×5px)
+        </Button>
+        <Button variant="outlined" onClick={() => changeFont(+1)}>
+          A+
+        </Button>
+        <Button variant="outlined" onClick={() => changeFont(-1)}>
+          A–
         </Button>
         <Button variant="contained" onClick={handleSave}>
           Save Template
@@ -184,15 +239,17 @@ export default function LabelFormat() {
 
       {/* Rich Text Editor */}
       <Paper sx={{ overflow: "hidden", position: "relative" }}>
-        <ReactQuill
-          ref={quillRef}
-          theme="snow"
-          value={editorHtml}
-          onChange={setEditorHtml}
-          modules={modules}
-          formats={formats}
-          style={{ backgroundColor: "#fff" }}
-        />
+        <div>
+          <ReactQuill
+            ref={quillRef}
+            theme="snow"
+            value={editorHtml}
+            onChange={setEditorHtml}
+            modules={modules}
+            formats={formats}
+            style={{ backgroundColor: "#fff" }}
+          />
+        </div>
       </Paper>
 
       {/* Dynamic Live Editor Preview */}
