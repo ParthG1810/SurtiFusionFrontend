@@ -12,7 +12,6 @@ import "../css/LabelFormat.css";
 
 // Register image-resize against the real Quill constructor
 Quill.register("modules/imageResize", ImageResize);
-
 const SAMPLE_NAME = "Alice Smith";
 const SAMPLE_ADDRESS = "123 Main St, Springfield";
 
@@ -29,12 +28,11 @@ export default function LabelFormat() {
     api
       .get("/label-template")
       .then(({ data }) => {
-        const content = data.content || "";
-        setSavedHtml(content);
-        setEditorHtml(content);
-        setDynamicHtml(content);
+        setSavedHtml(data.content || "");
+        setEditorHtml(data.content || "");
+        setDynamicHtml(data.content || "");
         if (quillRef.current) {
-          quillRef.current.getEditor().root.innerHTML = content;
+          quillRef.current.getEditor().root.innerHTML = data.content;
         }
       })
       .catch((err) => {
@@ -89,8 +87,8 @@ export default function LabelFormat() {
     const editor = quillRef.current?.getEditor();
     if (!editor) return;
 
-    // Use template placeholder instead of prompt
-    const text = "{{customerName}}-{{mealPlan}}";
+    const text = prompt("Enter text for QR code:");
+    if (!text) return;
 
     // QuickChart API for a 5×5 px QR
     const url = `https://quickchart.io/qr?text=${encodeURIComponent(
@@ -103,7 +101,8 @@ export default function LabelFormat() {
       range = { index: editor.getLength(), length: 0 };
     }
 
-    // Build an absolutely-positioned <img> tag
+    // Insert as an image embed
+    //editor.insertEmbed(range.index, "image", url, Quill.sources.USER);
     const imgHtml = `
       <img
         src="${url}"
@@ -118,26 +117,26 @@ export default function LabelFormat() {
         alt="QR code"
       />
     `;
-
-    // Inject into the editor
+    // Move cursor after embed
+    //editor.setSelection(range.index + 1, Quill.sources.SILENT);
     editor.clipboard.dangerouslyPasteHTML(range.index, imgHtml);
     editor.setSelection(range.index + 1, Quill.sources.SILENT);
   };
 
-  // Quill modules
+  // Quill modules (toolbar unchanged + imageResize)
   const modules = {
     toolbar: [
       [{ header: [1, 2, 3, 4, 5, 6, false] }],
-      [{ size: ["small", false, "large", "huge"] }],
+      [{ size: ["small", false, "large", "huge"] }], // font sizes
       ["bold", "italic", "underline", "strike"],
       ["blockquote", "code-block"],
       ["link", "image", "video", "formula"],
-      [{ script: "sub" }, { script: "super" }],
-      [{ indent: "-1" }, { indent: "+1" }],
-      [{ direction: "rtl" }],
+      [{ script: "sub" }, { script: "super" }], // superscript/subscript
+      [{ indent: "-1" }, { indent: "+1" }], // outdent/indent
+      [{ direction: "rtl" }], // text direction
       [{ color: [] }, { background: [] }],
-      [{ font: [] }],
-      [{ align: [] }],
+      [{ font: [] }], // font families
+      [{ align: [] }], // alignment options
       [{ list: "ordered" }, { list: "bullet" }, { list: "check" }],
       ["clean"],
     ],
@@ -183,19 +182,23 @@ export default function LabelFormat() {
       </Stack>
 
       {/* Rich Text Editor */}
+      {/*<Paper>*/}
       <Paper sx={{ overflow: "hidden", position: "relative" }}>
-        <ReactQuill
-          ref={quillRef}
-          theme="snow"
-          value={editorHtml}
-          onChange={setEditorHtml}
-          modules={modules}
-          formats={formats}
-          style={{ backgroundColor: "#fff" }}
-        />
+        <Box sx={{}}>
+          <div className="custom-quill">
+            <ReactQuill
+              ref={quillRef}
+              theme="snow"
+              value={editorHtml}
+              onChange={setEditorHtml}
+              modules={modules}
+              formats={formats}
+              style={{ backgroundColor: "#fff" }}
+            />
+          </div>
+        </Box>
       </Paper>
-
-      {/* Dynamic Live Editor Preview */}
+      {/* ---Dynamic Live Editor Preview --- */}
       <Box>
         <Typography variant="h6">Dynamic Live Editor Preview</Typography>
         <Paper
@@ -221,7 +224,7 @@ export default function LabelFormat() {
               height: "2in",
               margin: "auto",
               overflow: "hidden",
-              pointerEvents: "none",
+              pointerEvents: "none", // prevent text selection
             }}
           />
         </Paper>

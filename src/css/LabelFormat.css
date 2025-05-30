@@ -11,7 +11,8 @@
   min-width: 4in;
   min-height: 2in;
   border-style: groove;    
-  overflow: hidden;    
+  overflow: hidden;  
+   position: relative;  
 }
 .quill-preview {
   width: 4in;              /* 4 inches wide */
@@ -23,4 +24,7 @@
   min-height: 2in;
   border-style: groove; 
   overflow: hidden;        
+}
+.ql-editor img[style*="position:absolute"] {
+  pointer-events: none;
 }
