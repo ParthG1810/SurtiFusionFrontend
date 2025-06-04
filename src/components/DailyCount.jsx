@@ -124,21 +124,51 @@ export default function DailyCount() {
         severity: "warning",
       });
     }
-
+    if (!rows || rows.length === 0) {
+      notify({ message: "No labels to print", severity: "warning" });
+      return "";
+    }
     // distinct customer→address
     const custMap = new Map();
     rows.forEach((r) => {
       if (!custMap.has(r.customer)) {
-        custMap.set(r.customer, r.address || "");
+        custMap.set(r.customer, {
+          address: r.address || "",
+          plan: r.plan || "",
+        });
       }
     });
 
     // generate HTML
     const html = Array.from(custMap.entries())
-      .map(([name, address]) => {
-        const filled = tpl
+      .map(([name, info]) => {
+        const { address, plan } = info;
+        let filled = tpl
           .replace(/{{customerName}}/g, name)
-          .replace(/{{customerAddress}}/g, address);
+          .replace(/{{customerAddress}}/g, address)
+          .replace(/{{mealPlan}}/g, plan);
+        let qrText = `${name}-${plan}`;
+        // qrText = qrText.replace(/ /g, "%20");
+        console.log(qrText);
+        const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(
+          qrText
+        )}&size=1&margin=3`;
+
+        filled = filled.replace(
+          /<img[^>]*src=(["'])(?:https:\/\/quickchart\.io\/)[^>]*>/i,
+          `<img id="qr-placeholder" 
+            src="${qrUrl}"
+            style="
+              position:absolute;
+              bottom:2mm;
+              left:2mm;
+              width:10mm;
+              height:10mm;
+            "
+            alt="QR code"
+          />`
+        );
+        console.log(filled);
         return `
 <div class="label" >
   <div class="ql-container ql-snow">

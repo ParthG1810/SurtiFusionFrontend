@@ -137,7 +137,7 @@ export default function LabelFormat() {
     // QuickChart API for a 5×5 px QR
     const url = `https://quickchart.io/qr?text=${encodeURIComponent(
       text
-    )}&size=5`;
+    )}&size=1&margin=3`;
 
     // Determine insertion index (append if no selection)
     let range = editor.getSelection(true);
@@ -147,20 +147,19 @@ export default function LabelFormat() {
 
     // Build an absolutely-positioned <img> tag
     const imgHtml = `
-      <img
+      <img id="qr-placeholder" 
         src="${url}"
         style="
           position:absolute;
           bottom:2mm;
           left:2mm;
-          width:5mm;
-          height:5mm;
+          width:2mm;
+          height:2mm;
           z-index:10;
         "
         alt="QR code"
       />
     `;
-
     // Inject into the editor
     editor.clipboard.dangerouslyPasteHTML(range.index, imgHtml);
     editor.setSelection(range.index + 1, Quill.sources.SILENT);
@@ -260,7 +259,6 @@ export default function LabelFormat() {
             width: "6in",
             height: "3in",
             position: "relative",
-            p: 1,
             margin: "auto",
             overflow: "hidden",
           }}
