@@ -1,100 +1,173 @@
 // src/components/DailyCount.jsx
 
 import React, { useState, useEffect, useRef } from "react";
-import "../css/DailyCount.css";
-import printJS from "print-js";
-import ReactQuill, { Quill } from "react-quill";
 import { DataGrid } from "@mui/x-data-grid";
 import {
   Box,
   Typography,
   Button,
+  Paper,
   FormControl,
   InputLabel,
   Select,
   MenuItem,
-  Paper,
 } from "@mui/material";
-import { daily } from "../services/orders";
-import { useNotification } from "../context/NotificationContext";
+import ReactQuill from "react-quill";
+import "react-quill/dist/quill.snow.css";
+import { useReactToPrint } from "react-to-print";
 import { QRCodeSVG } from "qrcode.react";
+import { daily } from "../services/orders";
 import api from "../services/api";
+import { useNotification } from "../context/NotificationContext";
 
 export default function DailyCount() {
   const notify = useNotification();
-  const [printHtml, setPrintHtml] = useState("");
-  // All tiffins for today
+  const printRef = useRef();
+
+  // packing workflow
   const [rows, setRows] = useState([]);
-  // Subset remaining to pack
   const [remaining, setRemaining] = useState([]);
-  // Are we in “packing” mode?
   const [packing, setPacking] = useState(false);
-  // IDs of rows that user has checked as “packed”
   const [selectionModel, setSelectionModel] = useState([]);
   const [templateHtml, setTemplateHtml] = useState("");
+  const previewCustomerRef = useRef(null);
   const [previewCustomer, setPreviewCustomer] = useState(null);
-  // Load data once
+
+  // load tiffins & saved template
   useEffect(() => {
+    let pc = null;
     daily()
       .then((res) => {
-        console.log(res.data);
         const data = res.data.map((item, idx) => {
           const o = item.order;
-          const plan = item.meal_plan;
-          const cust = o.customer || {};
+          const p = item.meal_plan;
+          const c = o.customer || {};
           return {
             id: idx + 1,
-            plan: plan?.name || plan?.planname,
-            customer: cust?.name,
-            address: cust.address,
+            plan: p?.name || p?.planname,
+            customer: c.name,
+            address: c.address,
             qty: item.quantity,
           };
         });
         setRows(data);
-        // set default preview customer to first in list
-        if (data.length) setPreviewCustomer(data[0]);
+        if (data.length) {
+          setPreviewCustomer(data[0]);
+          pc = data[0];
+          console.log(pc);
+        }
+        api
+          .get("/label-template")
+          .then(({ data }) => {
+            const content = data.content || "";
+            setTemplateHtml(data.content || "");
+            // Also build the initial “live preview”
+            if (previewCustomerRef.current) {
+              previewCustomerRef.current.innerHTML = builPreviewCustomerHtml(
+                content,
+                pc
+              );
+              console.log(content);
+              console.log(pc);
+            }
+          })
+          .catch((err) => {
+            console.error(err);
+            notify({ message: "Failed to load template", severity: "error" });
+          });
       })
       .catch((err) => notify({ message: err.message, severity: "error" }));
-    // fetch saved label template
-    api
-      .get("/label-template")
-      .then(({ data }) => {
-        setTemplateHtml(data.content || "");
-      })
-      .catch((err) => {
-        console.error(err);
-        notify({ message: "Failed to load template", severity: "error" });
-      });
   }, [notify]);
-  // Start Packing: initialize remaining list
+
+  function builPreviewCustomerHtml(html, previewCustomer) {
+    // 1) Substitute “SAMPLE_NAME”, “SAMPLE_ADDRESS”, and “SAMPLE_PLAN”
+    let filled = html
+      .replace(/{{customerName}}/g, previewCustomer.customer)
+      .replace(/{{customerAddress}}/g, previewCustomer.address)
+      .replace(/{{mealPlan}}/g, previewCustomer.plan);
+
+    // 2) Compute the QR payload & URL (5mm × 5mm)
+    const qrPayload = `${previewCustomer.customer}-${previewCustomer.plan}`;
+    const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(
+      qrPayload
+    )}&size=10&margin=3`;
+
+    // 3) Replace only the <img id="qr-placeholder" …> node with actual QR
+    const placeholderRegex =
+      /<img[^>]*src=(["'])(?:https:\/\/quickchart\.io\/)[^>]*>/gi;
+    filled = filled.replace(
+      placeholderRegex,
+      `<img
+        id="qr-placeholder"
+        src="${qrUrl}"
+        style="
+          position:absolute;
+          bottom:2mm;
+          left:2mm;
+          width:10mm;
+          height:10mm;
+        "
+        alt="QR code"
+      />`
+    );
+    return `
+      <div class="label" >
+  <div class="ql-container ql-snow">
+    <div class="ql-editor">${filled}</div>
+  </div>
+</div>
+    `;
+  }
+  // packing handlers
   const handleStart = () => {
     setRemaining(rows);
     setSelectionModel([]);
     setPacking(true);
   };
-
-  // End Packing: find unchecked = still to pack
   const handleEnd = () => {
-    const packedIds = new Set(selectionModel);
-    const unchecked = remaining.filter((r) => !packedIds.has(r.id));
-
-    if (unchecked.length === 0) {
-      notify({ message: "Done with packing for today!", severity: "success" });
+    const packed = new Set(selectionModel);
+    const leftover = remaining.filter((r) => !packed.has(r.id));
+    if (leftover.length === 0) {
+      notify({ message: "Done packing!", severity: "success" });
       setPacking(false);
     } else {
       notify({
-        message:
-          "These tiffins remain to pack – please pack them and try again.",
+        message: "These tiffins remain – please pack them and try again.",
         severity: "warning",
       });
-      setRemaining(unchecked);
-      setSelectionModel([]); // reset for next pass
+      setRemaining(leftover);
+      setSelectionModel([]);
     }
   };
 
-  // New: Print Labels button handler
+  const triggerPrint = useReactToPrint({
+    content: () => printRef.current,
+    contentRef: printRef,
+    pageStyle: `
+    @page {size: 4in 2in;margin: 0mm }
+    body { margin:0mm; padding: 0mm }
+   
+    .label {
+      border: none !important;
+      width: 4in; height: 2in;
+      box-shadow: none !important;
+      overflow: hidden;
+    }
+    .ql-container {
+      border: none !important;
+      box-shadow: none !important;
+      overflow: hidden;
+    }
+    .ql-editor {
+      margin: 0;
+      border: none !important;
+      padding: 0 !important;
+    }
+  `,
+  });
+  // build & print
   const handlePrintLabels = async () => {
-    // 1. Fetch the saved template HTML
+    // fetch latest template
     let tpl = "";
     try {
       const { data } = await api.get("/label-template");
@@ -104,96 +177,84 @@ export default function DailyCount() {
     }
     if (!tpl) {
       return notify({
-        message: "No saved template to print",
+        message: "Save your label template first.",
         severity: "warning",
       });
     }
+    if (!rows || rows.length === 0) {
+      notify({ message: "No labels to print", severity: "warning" });
+      return "";
+    }
+    // distinct customer→address
+    const custMap = new Map();
+    rows.forEach((r) => {
+      if (!custMap.has(r.customer)) {
+        custMap.set(r.customer, {
+          address: r.address || "",
+          plan: r.plan || "",
+        });
+      }
+    });
 
-    // 2. Build distinct customer → address map
-    const custMap = rows.reduce((m, r) => {
-      if (!m.has(r.customer)) m.set(r.customer, r.address || "");
-      return m;
-    }, new Map());
-
-    // 3. Generate each label’s inner HTML
-    const labelsHtml = Array.from(custMap.entries())
-      .map(([name, address]) => {
-        // inject fields
-        let inner = tpl
+    // generate HTML
+    const html = Array.from(custMap.entries())
+      .map(([name, info]) => {
+        const { address, plan } = info;
+        let filled = tpl
           .replace(/{{customerName}}/g, name)
-          .replace(/{{customerAddress}}/g, address);
-        console.log(inner);
-        // b) swap QR placeholder for <img>
-        inner = inner.replace(
-          /<div id="qr-placeholder"[^>]*><\/div>/,
-          `<div class="qr"><img
-            src="https://chart.googleapis.com/chart?chs=60x60&cht=qr&chl=${encodeURIComponent(
-              name
-            )}"
-            width="60" height="60" alt="QR Code"/></div>`
+          .replace(/{{customerAddress}}/g, address)
+          .replace(/{{mealPlan}}/g, plan);
+        let qrText = `${name}-${plan}`;
+        // qrText = qrText.replace(/ /g, "%20");
+        console.log(qrText);
+        const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(
+          qrText
+        )}&size=1&margin=3`;
+
+        filled = filled.replace(
+          /<img[^>]*src=(["'])(?:https:\/\/quickchart\.io\/)[^>]*>/i,
+          `<img id="qr-placeholder" 
+            src="${qrUrl}"
+            style="
+              position:absolute;
+              bottom:2mm;
+              left:2mm;
+              width:10mm;
+              height:10mm;
+            "
+            alt="QR code"
+          />`
         );
-        // c) wrap in Quill containers
+        console.log(filled);
         return `
-       <div class="label" style="width: 4.5in; height: 2.5in;  overflow: hidden; pointer-events: none;" >
-          <div class="ql-container ql-snow ">
-           <div class="ql-editor" style="width: 4in; height: 2in;  overflow: hidden; pointer-events: none;">
-             ${inner}
-           </div>
-         </div>
-       </div>
-     `;
+<div class="label" >
+  <div class="ql-container ql-snow">
+    <div class="ql-editor">${filled}</div>
+  </div>
+</div>`;
       })
       .join("\n");
-    setPrintHtml(labelsHtml);
 
-    // 4) Wrap all labels in a printable container
-    const printableHtml = `<div>${labelsHtml}</div>`;
-    // 4. Build the full HTML for printing
-    const fullHtml = `
-     <!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8"/>
- <link href="https://cdn.quilljs.com/1.3.6/quill.core.css" rel="stylesheet">
-  <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
-  <link rel="stylesheet" href="../css/DailyCount.css">
-  <style>
-  </style>
-</head>
-<body  >
-  ${labelsHtml}
-    <script>
-    // Wait for styles and images to load, then trigger print
-    window.onload = () => {
-      window.focus();
-      window.print();
-      // Optionally, close this window after printing:
-      window.onafterprint = () => window.close();
-    };
-  </script>
-</body>
-</html>`;
-
-    //------------------------
-    // 5) open a new window and write the HTML
-    const w = window.open("", "_blank", "width=800,height=600");
-    if (!w) {
-      return notify({
-        message: "Popup blocked. Please allow popups.",
-        severity: "error",
-      });
+    // inject & fire
+    if (printRef.current) {
+      printRef.current.innerHTML = html;
+      triggerPrint();
     }
-    w.document.open();
-    w.document.write(fullHtml);
-    w.document.close();
   };
-  // Rows to display: full list or just remaining
+  const handleCustomerChange = (c) => {
+    setPreviewCustomer(c);
+    if (previewCustomerRef.current) {
+      previewCustomerRef.current.innerHTML = builPreviewCustomerHtml(
+        templateHtml,
+        c
+      );
+    }
+  };
+  // grid + preview
   const displayRows = packing ? remaining : rows;
-
   const columns = [
     { field: "plan", headerName: "Meal Plan", width: 200 },
     { field: "customer", headerName: "Customer", width: 180 },
-    /*{ field: 'address',  headerName: 'Address',   width: 200 }, // optional*/
     { field: "qty", headerName: "Quantity", width: 100 },
   ];
 
@@ -204,7 +265,7 @@ export default function DailyCount() {
       </Typography>
 
       {!packing ? (
-        <Button variant="contained" onClick={handleStart} sx={{ mb: 2 }}>
+        <Button variant="contained" onClick={handleStart} sx={{ mr: 1 }}>
           Start Packing
         </Button>
       ) : (
@@ -212,40 +273,35 @@ export default function DailyCount() {
           variant="contained"
           color="secondary"
           onClick={handleEnd}
-          sx={{ mb: 2 }}
+          sx={{ mr: 1 }}
         >
           End Packing
         </Button>
       )}
-
-      {/* New Print Labels button */}
-      <Button variant="outlined" onClick={handlePrintLabels} sx={{ ml: 1 }}>
+      <Button variant="outlined" onClick={handlePrintLabels}>
         Print Labels
       </Button>
-      {/* — Hidden container for Print-JS — */}
-      <div
-        id="print-area"
-        style={{ display: "none" }}
-        dangerouslySetInnerHTML={{
-          __html: printHtml,
-        }}
-      />
-      <DataGrid
-        rows={displayRows}
-        columns={columns}
-        pageSize={5}
-        rowsPerPageOptions={[5]}
-        autoHeight
-        checkboxSelection={packing}
-        disableSelectionOnClick
-        selectionModel={selectionModel}
-        onSelectionModelChange={(newSelection) =>
-          setSelectionModel(newSelection)
-        }
-      />
 
-      {/* Label Preview Section */}
-      {!packing && (
+      {/* Hidden container */}
+      <div style={{ display: "none" }}>
+        <div ref={printRef} />
+      </div>
+
+      <Box sx={{ height: 400, mt: 2 }}>
+        <DataGrid
+          rows={displayRows}
+          columns={columns}
+          pageSize={5}
+          rowsPerPageOptions={[5]}
+          checkboxSelection={packing}
+          disableSelectionOnClick
+          selectionModel={selectionModel}
+          onSelectionModelChange={(sel) => setSelectionModel(sel)}
+        />
+      </Box>
+
+      {/* Label Preview */}
+      {!packing && previewCustomer && (
         <Paper sx={{ mt: 4, p: 2 }}>
           <Typography variant="h6" gutterBottom>
             Label Preview
@@ -256,10 +312,10 @@ export default function DailyCount() {
             <Select
               labelId="preview-customer-label"
               label="Customer"
-              value={previewCustomer?.id || ""}
+              value={previewCustomer.id}
               onChange={(e) => {
-                const cust = rows.find((r) => r.id === e.target.value);
-                setPreviewCustomer(cust);
+                const c = rows.find((r) => r.id === e.target.value);
+                handleCustomerChange(c);
               }}
             >
               {rows.map((r) => (
@@ -270,78 +326,18 @@ export default function DailyCount() {
             </Select>
           </FormControl>
           <Paper
+            elevation={3}
             sx={{
-              width: "6in",
-              height: "3in",
+              width: "4in",
+              height: "2in",
               position: "relative",
-              p: 1,
               margin: "auto",
               overflow: "hidden",
             }}
           >
-            <ReactQuill
-              theme="snow"
-              value={templateHtml
-                .replace(/{{customerName}}/g, previewCustomer?.customer || "")
-                .replace(
-                  /{{customerAddress}}/g,
-                  previewCustomer?.address || ""
-                )}
-              readOnly
-              modules={{ toolbar: false }}
-              formats={{}}
-              style={{
-                width: "4in",
-                height: "2in",
-                margin: "auto",
-                overflow: "hidden",
-                pointerEvents: "none", // prevent text selection
-              }}
-            />
-          </Paper>
-          <Paper
-            elevation={3}
-            sx={{
-              width: "6in",
-              height: "3in",
-              position: "relative",
-              overflow: "hidden",
-              p: "0.2in",
-              boxSizing: "border-box",
-              backgroundColor: "#fff",
-            }}
-          >
-            {/* Render the template HTML with placeholders replaced */}
-            <div
-              style={{
-                width: "4in",
-                height: "2in",
-                margin: "auto",
-                borderStyle: "groove",
-                overflow: "hidden",
-              }}
-              dangerouslySetInnerHTML={{
-                __html: templateHtml
-                  .replace(/{{customerName}}/g, previewCustomer?.customer || "")
-                  .replace(
-                    /{{customerAddress}}/g,
-                    previewCustomer?.address || ""
-                  ),
-              }}
-            />
-
-            {/* Overlay the QR code in the placeholder location */}
-            <Box
-              sx={{
-                position: "absolute",
-                bottom: "10px",
-                left: "10px",
-              }}
-            >
-              {previewCustomer && (
-                <QRCodeSVG value={previewCustomer.customer} size={60} />
-              )}
-            </Box>
+            <div style={{ width: "4in", height: "2in" }}>
+              <div ref={previewCustomerRef} />
+            </div>
           </Paper>
         </Paper>
       )}
@@ -349,104 +345,67 @@ export default function DailyCount() {
   );
 }
 
-/*import React, { useState, useEffect } from 'react';
-import { DataGrid } from '@mui/x-data-grid';
-import { daily } from '../services/orders';
-import { useNotification } from '../context/NotificationContext';
-import { Box, Typography } from '@mui/material';
+/* <Paper
+            elevation={3}
+            sx={{
+              width: "4in",
+              height: "2in",
+              position: "relative",
+              overflow: "hidden",
+              p: "0.2in",
+              boxSizing: "border-box",
+              backgroundColor: "#fff",
+            }}
+          >
+            <ReactQuill
+              theme="bubble"
+              value={templateHtml
+                .replace(/{{customerName}}/g, previewCustomer.customer)
+                .replace(/{{customerAddress}}/g, previewCustomer.address)}
+              readOnly
+              modules={{ toolbar: false }}
+              formats={[
+                "header",
+                "bold",
+                "italic",
+                "underline",
+                "strike",
+                "color",
+                "background",
+                "size",
+                "align",
+                "link",
+                "image",
+              ]}
+              style={{ height: "100%", pointerEvents: "none" }}
+            />
+            <Box sx={{ position: "absolute", bottom: 10, left: 10 }}>
+              <QRCodeSVG value={previewCustomer.customer} size={60} />
+            </Box>
+          </Paper> */
 
-export default function DailyCount() {
-  const notify = useNotification();
-  const [rows, setRows] = useState([]);
-
-  useEffect(() => {
-    daily()
-      .then(res => {
-        const data = res.data.map((item, idx) => {
-          const o = item.order;
-          const plan = item.meal_plan;
-          return {
-            id: idx,
-            plan: plan?.name || plan?.planname,
-            customer: o.customer?.name,
-            qty: item.quantity
-          };
-        });
-        setRows(data);
-      })
-      .catch(err => notify({ message:err.message, severity:'error' }));
-  }, []);
-
-  const columns = [
-    { field:'plan',     headerName:'Meal Plan', width:200 },
-    { field:'customer', headerName:'Customer',  width:180 },
-    { field:'qty',      headerName:'Quantity',  width:100 }
-  ];
-
-  return (
-    <Box sx={{ height:400, width:'100%', mt:2 }}>
-      <Typography variant="h6" mb={1}>Today's Tiffin Counts</Typography>
-      <DataGrid rows={rows} columns={columns} pageSize={5} />
-    </Box>
-  );
-}*/
-/*
-// 5. Create a hidden iframe and print
-const iframe = document.createElement("iframe");
-Object.assign(iframe.style, {
-  position: "fixed",
-  width: "0",
-  height: "0",
-  border: "0",
-  right: "0",
-  bottom: "0",
-});
-document.body.appendChild(iframe);
-
-const doc = iframe.contentWindow.document;
-doc.open();
-doc.write(fullHtml);
-doc.close();
-
-iframe.onload = () => {
-  iframe.contentWindow.focus();
-  iframe.contentWindow.print();
-  setTimeout(() => document.body.removeChild(iframe), 500);
-};
-*/
-/*// 5) Print with print-js in raw-html mode
-    printJS({
-      printable: printableHtml,
-      type: "raw-html",
-      css: [
-        "https://cdn.quilljs.com/1.3.6/quill.core.css",
-        "https://cdn.quilljs.com/1.3.6/quill.snow.css",
-      ],
-      targetStyles: ["*"], // bring along inline styles (image resize etc)
-      honorMarginPadding: true,
-      style: `
-@media print {
-  @page { size: 4in 2in; margin: 0; }
-  body { margin: 0; }
-}
-.label {
-  position: relative;
-  width: 4in; height: 2in;
-  padding: 0.2in; box-sizing: border-box;
-  page-break-after: always;
-  overflow: hidden;
-}
-.ql-container {
-  border: none !important;
-  height: 100% !important;
-}
-.ql-editor {
-  margin: 0; padding: 0;
-}
-.qr {
-  position: absolute;
-  bottom: 10px; left: 10px;
-}
+/* const triggerPrint = useReactToPrint({
+    content: () => printRef.current,
+    contentRef: printRef, // legacy fallback
+    pageStyle: `
+    @page {
+      size: auto;   
+      margin: 0mm;  
+    }
+    body {
+      margin: 0mm;
+    }
+      @page { size: 4in 2in;}
+      
+      body { padding: 0mm; }
+      .label {
+      border: none !important;
+      box-shadow: none !important;
+        width: 4in; height: 2in;
+        border: none;
+        overflow: hidden;
+        border-color: white;
+      }
     `,
-    });
-    */
+  });
+  */

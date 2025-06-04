@@ -29,13 +29,13 @@ export default function DailyCount() {
   const [remaining, setRemaining] = useState([]);
   const [packing, setPacking] = useState(false);
   const [selectionModel, setSelectionModel] = useState([]);
-
-  // template + preview
   const [templateHtml, setTemplateHtml] = useState("");
+  const previewCustomerRef = useRef(null);
   const [previewCustomer, setPreviewCustomer] = useState(null);
 
   // load tiffins & saved template
   useEffect(() => {
+    let pc = null;
     daily()
       .then((res) => {
         const data = res.data.map((item, idx) => {
@@ -51,16 +51,73 @@ export default function DailyCount() {
           };
         });
         setRows(data);
-        if (data.length) setPreviewCustomer(data[0]);
+        if (data.length) {
+          setPreviewCustomer(data[0]);
+          pc = data[0];
+          console.log(pc);
+        }
+        api
+          .get("/label-template")
+          .then(({ data }) => {
+            const content = data.content || "";
+            setTemplateHtml(data.content || "");
+            // Also build the initial “live preview”
+            if (previewCustomerRef.current) {
+              previewCustomerRef.current.innerHTML = builPreviewCustomerHtml(
+                content,
+                pc
+              );
+              console.log(content);
+              console.log(pc);
+            }
+          })
+          .catch((err) => {
+            console.error(err);
+            notify({ message: "Failed to load template", severity: "error" });
+          });
       })
-      .catch((err) => notify({ message: err.message, severity: "error" }));
-
-    api
-      .get("/label-template")
-      .then(({ data }) => setTemplateHtml(data.content || ""))
       .catch((err) => notify({ message: err.message, severity: "error" }));
   }, [notify]);
 
+  function builPreviewCustomerHtml(html, previewCustomer) {
+    // 1) Substitute “SAMPLE_NAME”, “SAMPLE_ADDRESS”, and “SAMPLE_PLAN”
+    let filled = html
+      .replace(/{{customerName}}/g, previewCustomer.customer)
+      .replace(/{{customerAddress}}/g, previewCustomer.address)
+      .replace(/{{mealPlan}}/g, previewCustomer.plan);
+
+    // 2) Compute the QR payload & URL (5mm × 5mm)
+    const qrPayload = `${previewCustomer.customer}-${previewCustomer.plan}`;
+    const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(
+      qrPayload
+    )}&size=10&margin=3`;
+
+    // 3) Replace only the <img id="qr-placeholder" …> node with actual QR
+    const placeholderRegex =
+      /<img[^>]*src=(["'])(?:https:\/\/quickchart\.io\/)[^>]*>/gi;
+    filled = filled.replace(
+      placeholderRegex,
+      `<img
+        id="qr-placeholder"
+        src="${qrUrl}"
+        style="
+          position:absolute;
+          bottom:2mm;
+          left:2mm;
+          width:10mm;
+          height:10mm;
+        "
+        alt="QR code"
+      />`
+    );
+    return `
+      <div class="label" >
+  <div class="ql-container ql-snow">
+    <div class="ql-editor">${filled}</div>
+  </div>
+</div>
+    `;
+  }
   // packing handlers
   const handleStart = () => {
     setRemaining(rows);
@@ -184,7 +241,15 @@ export default function DailyCount() {
       triggerPrint();
     }
   };
-
+  const handleCustomerChange = (c) => {
+    setPreviewCustomer(c);
+    if (previewCustomerRef.current) {
+      previewCustomerRef.current.innerHTML = builPreviewCustomerHtml(
+        templateHtml,
+        c
+      );
+    }
+  };
   // grid + preview
   const displayRows = packing ? remaining : rows;
   const columns = [
@@ -250,7 +315,7 @@ export default function DailyCount() {
               value={previewCustomer.id}
               onChange={(e) => {
                 const c = rows.find((r) => r.id === e.target.value);
-                setPreviewCustomer(c);
+                handleCustomerChange(c);
               }}
             >
               {rows.map((r) => (
@@ -260,8 +325,27 @@ export default function DailyCount() {
               ))}
             </Select>
           </FormControl>
-
           <Paper
+            elevation={3}
+            sx={{
+              width: "4in",
+              height: "2in",
+              position: "relative",
+              margin: "auto",
+              overflow: "hidden",
+            }}
+          >
+            <div style={{ width: "4in", height: "2in" }}>
+              <div ref={previewCustomerRef} />
+            </div>
+          </Paper>
+        </Paper>
+      )}
+    </Box>
+  );
+}
+
+/* <Paper
             elevation={3}
             sx={{
               width: "4in",
@@ -298,12 +382,7 @@ export default function DailyCount() {
             <Box sx={{ position: "absolute", bottom: 10, left: 10 }}>
               <QRCodeSVG value={previewCustomer.customer} size={60} />
             </Box>
-          </Paper>
-        </Paper>
-      )}
-    </Box>
-  );
-}
+          </Paper> */
 
 /* const triggerPrint = useReactToPrint({
     content: () => printRef.current,

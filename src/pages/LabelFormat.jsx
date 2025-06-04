@@ -5,39 +5,51 @@ import ReactQuill from "react-quill";
 import Quill from "quill"; // core Quill
 import ImageResize from "quill-image-resize-module-react";
 import "react-quill/dist/quill.snow.css";
-import interact from "interactjs";
 import { Box, Button, Typography, Paper, Stack } from "@mui/material";
 import api from "../services/api";
 import { useNotification } from "../context/NotificationContext";
 import "../css/LabelFormat.css";
-// Register image-resize against the real Quill constructor
+
+// 1) Register image-resize plugin against Quill
 Quill.register("modules/imageResize", ImageResize);
+
+// 2) Add a custom Attributor for changing font-size in px:
 const Parchment = Quill.import("parchment");
 const SizePx = new Parchment.Attributor.Style("sizePx", "font-size", {
   scope: Parchment.Scope.INLINE,
 });
 Quill.register(SizePx, true);
 
+// Sample placeholder values for “live” preview (replace later with real props)
 const SAMPLE_NAME = "Alice Smith";
 const SAMPLE_ADDRESS = "123 Main St, Springfield";
+const SAMPLE_PLAN = "Dal + Sabzi + Roti";
 
 export default function LabelFormat() {
   const notify = useNotification();
   const quillRef = useRef(null);
-
-  const [dynamicHtml, setDynamicHtml] = useState("");
+  const liveRef = useRef(null);
+  // tracks the raw HTML from Quill
   const [editorHtml, setEditorHtml] = useState("");
 
-  // Load saved template on mount
+  // ----------------------------
+  //  Load the saved template
+  // ----------------------------
   useEffect(() => {
     api
       .get("/label-template")
       .then(({ data }) => {
         const content = data.content || "";
         setEditorHtml(content);
-        setDynamicHtml(content);
+
+        // Check if Quill is ready, then inject HTML into the Quill editor
         if (quillRef.current) {
           quillRef.current.getEditor().root.innerHTML = content;
+        }
+
+        // Also build the initial “live preview”
+        if (liveRef.current) {
+          liveRef.current.innerHTML = buildLivePreviewHtml(content);
         }
       })
       .catch((err) => {
@@ -46,17 +58,23 @@ export default function LabelFormat() {
       });
   }, [notify]);
 
-  // Save handler
+  // ----------------------------
+  //  Save handler
+  // ----------------------------
   const handleSave = () => {
     if (!quillRef.current) return;
-    // allow any inline resize styles to settle
+    // Give Quill a moment to flush any inline‐resize styles
     setTimeout(async () => {
       const content = quillRef.current.getEditor().root.innerHTML;
       try {
         const { data } = await api.post("/label-template", { content });
         setEditorHtml(data.content);
-        setDynamicHtml(data.content);
         notify({ message: "Template saved!", severity: "success" });
+
+        // Update the live preview right after saving
+        if (liveRef.current) {
+          liveRef.current.innerHTML = buildLivePreviewHtml(data.content);
+        }
       } catch (err) {
         console.error(err);
         notify({ message: "Save failed", severity: "error" });
@@ -64,41 +82,50 @@ export default function LabelFormat() {
     }, 0);
   };
 
-  // Cancel & reload handler
+  // ----------------------------
+  //  Cancel & reload handler
+  // ----------------------------
   const handleCancelLoad = () => {
     api
       .get("/label-template")
       .then(({ data }) => {
-        setEditorHtml(data.content);
-        setDynamicHtml(data.content);
+        const content = data.content || "";
+        setEditorHtml(content);
         if (quillRef.current) {
-          quillRef.current.getEditor().root.innerHTML = data.content;
+          quillRef.current.getEditor().root.innerHTML = content;
         }
         notify({
           message: "Cancelled changes and Loaded saved template",
           severity: "info",
         });
+
+        // Refresh the live preview as well
+        if (liveRef.current) {
+          liveRef.current.innerHTML = buildLivePreviewHtml(content);
+        }
       })
       .catch((err) => {
         console.error(err);
         notify({ message: "Load failed", severity: "error" });
       });
   };
-  // — Font size handlers —
+
+  // ----------------------------
+  //   Font‐size (A+/A–) handlers
+  // ----------------------------
   const changeFont = (delta) => {
     const editor = quillRef.current?.getEditor();
     if (!editor) return;
     const range = editor.getSelection();
     if (!range) return;
 
-    // 1) Read any existing sizePx from the current selection
+    // 1) Read any existing “sizePx” from the selection
     const formats = editor.getFormat(range);
-
     let currentPx;
     if (formats.sizePx) {
       currentPx = parseInt(formats.sizePx, 10);
     } else {
-      // find the DOM node at the start of the selection
+      // If no “sizePx” is set, read the computed font size on the DOM node:
       const [leaf] = editor.getLeaf(range.index);
       let node = leaf.domNode;
       if (node.nodeType === Node.TEXT_NODE) {
@@ -108,10 +135,10 @@ export default function LabelFormat() {
       currentPx = parseInt(computed, 10) || 12;
     }
 
-    // 2) Compute new size
+    // 2) Compute the new size
     const newPx = Math.max(1, currentPx + delta);
 
-    // 3) Apply it over the whole selection
+    // 3) Apply it across the selection (or set as cursor format)
     if (range.length > 0) {
       editor.formatText(
         range.index,
@@ -121,12 +148,13 @@ export default function LabelFormat() {
         Quill.sources.USER
       );
     } else {
-      // collapsed cursor: set format for future typing
       editor.format("sizePx", `${newPx}px`, Quill.sources.USER);
     }
   };
 
-  // External Insert QR button handler
+  // ----------------------------
+  //   “Insert QR” button handler
+  // ----------------------------
   const insertQR = () => {
     const editor = quillRef.current?.getEditor();
     if (!editor) return;
@@ -160,12 +188,15 @@ export default function LabelFormat() {
         alt="QR code"
       />
     `;
-    // Inject into the editor
+    // Paste the placeholder HTML
     editor.clipboard.dangerouslyPasteHTML(range.index, imgHtml);
+    // Move cursor after the QR placeholder
     editor.setSelection(range.index + 1, Quill.sources.SILENT);
   };
 
-  // Quill modules
+  // ----------------------------
+  //   Quill toolbar & modules
+  // ----------------------------
   const modules = {
     toolbar: [
       [{ header: [1, 2, 3, 4, 5, 6, false] }],
@@ -188,7 +219,6 @@ export default function LabelFormat() {
     },
   };
 
-  // Formats must include image
   const formats = [
     "header",
     "size",
@@ -204,25 +234,80 @@ export default function LabelFormat() {
     "bullet",
     "link",
     "image",
-    "sizePx",
+    "sizePx", // so that our A+/A– handler works
   ];
-  // Constrain editor to 4″×2″ (approx 384×192px @96dpi)
-  const editorStyle = {
-    width: "4in",
-    height: "2in",
-    position: "relative",
-    border: "1px solid #ccc",
+
+  // ============================
+  //   buildLivePreviewHtml()
+  //   (identical to what the Print routine injects)
+  // ============================
+  function buildLivePreviewHtml(html) {
+    // 1) Substitute “SAMPLE_NAME”, “SAMPLE_ADDRESS”, and “SAMPLE_PLAN”
+    let filled = html
+      .replace(/{{customerName}}/g, SAMPLE_NAME)
+      .replace(/{{customerAddress}}/g, SAMPLE_ADDRESS)
+      .replace(/{{mealPlan}}/g, SAMPLE_PLAN);
+
+    // 2) Compute the QR payload & URL (5mm × 5mm)
+    const qrPayload = `${SAMPLE_NAME}-${SAMPLE_PLAN}`;
+    const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(
+      qrPayload
+    )}&size=10&margin=3`;
+
+    // 3) Replace only the <img id="qr-placeholder" …> node with actual QR
+    const placeholderRegex =
+      /<img[^>]*src=(["'])(?:https:\/\/quickchart\.io\/)[^>]*>/gi;
+    filled = filled.replace(
+      placeholderRegex,
+      `<img
+        id="qr-placeholder"
+        src="${qrUrl}"
+        style="
+          position:absolute;
+          bottom:2mm;
+          left:2mm;
+          width:10mm;
+          height:10mm;
+        "
+        alt="QR code"
+      />`
+    );
+
+    // 4) Wrap in Quill’s own containers (so that formatting from Quill is preserved)
+    //    We explicitly zero out Quill’s container/editor borders & padding so that nothing “extra” appears.
+    return `
+      <div class="label" >
+  <div class="ql-container ql-snow">
+    <div class="ql-editor">${filled}</div>
+  </div>
+</div>
+    `;
+  }
+
+  // ----------------------------
+  //   When the user types in Quill, keep dynamicHtml in sync
+  // ----------------------------
+  const handleEditorChange = (html) => {
+    setEditorHtml(html);
+
+    // Immediately re-build the “live preview” every time Quill content changes:
+    if (liveRef.current) {
+      liveRef.current.innerHTML = buildLivePreviewHtml(html);
+    }
   };
+
   return (
     <Box sx={{ maxWidth: 800, mx: "auto", mt: 4, display: "grid", gap: 4 }}>
       <Typography variant="h5">Label Template Editor (4″×2″)</Typography>
 
-      {/* Action Buttons */}
+      {/* ─────────────
+          Action Buttons
+         ───────────── */}
       <Stack direction="row" spacing={1}>
         <Button variant="outlined" onClick={insertQR}>
-          Insert QR (5×5px)
+          Insert QR
         </Button>
-        <Button variant="outlined" onClick={() => changeFont(+1)}>
+        <Button variant="contained" onClick={() => changeFont(+1)}>
           A+
         </Button>
         <Button variant="outlined" onClick={() => changeFont(-1)}>
@@ -236,22 +321,45 @@ export default function LabelFormat() {
         </Button>
       </Stack>
 
-      {/* Rich Text Editor */}
+      {/* ─────────────
+          Rich Text Editor
+         ───────────── */}
       <Paper sx={{ overflow: "hidden", position: "relative" }}>
-        <div>
-          <ReactQuill
-            ref={quillRef}
-            theme="snow"
-            value={editorHtml}
-            onChange={setEditorHtml}
-            modules={modules}
-            formats={formats}
-            style={{ backgroundColor: "#fff" }}
-          />
-        </div>
+        <ReactQuill
+          ref={quillRef}
+          theme="snow"
+          value={editorHtml}
+          onChange={handleEditorChange}
+          modules={modules}
+          formats={formats}
+          style={{ backgroundColor: "#fff" }}
+        />
       </Paper>
 
-      {/* Dynamic Live Editor Preview */}
+      {/* ───────────────────────────────────────────────────
+          LIVE PREVIEW (4″×2″) — EXACTLY what “Print Labels” uses
+         ─────────────────────────────────────────────────── */}
+      <Box>
+        <Typography variant="h6">Live Preview (4″×2″)</Typography>
+        <Paper
+          sx={{
+            width: "4in",
+            height: "2in",
+            position: "relative",
+            margin: "auto",
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ width: "4in", height: "2in" }}>
+            <div ref={liveRef} />
+          </div>
+        </Paper>
+      </Box>
+    </Box>
+  );
+}
+
+/* 
       <Box>
         <Typography variant="h6">Dynamic Live Editor Preview</Typography>
         <Paper
@@ -280,7 +388,4 @@ export default function LabelFormat() {
             }}
           />
         </Paper>
-      </Box>
-    </Box>
-  );
-}
+      </Box> */
